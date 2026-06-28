@@ -53,7 +53,7 @@ export function WelcomeScreen() {
         <Button
           label="Get started"
           size="lg"
-          onPress={() => router.push('/(onboarding)/goal')}
+          onPress={() => router.push('/(onboarding)/account-choice')}
         />
         <Button
           label="I already have an account"

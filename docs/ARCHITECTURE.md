@@ -66,6 +66,64 @@ encoded in npm peerDependencies ranges.
   `expo-env.d.ts` that hadn't been generated yet in our sandbox; the
   explicit shim is more robust regardless.)
 
+**Supabase + web static export crash (found in Phase 2, real and
+well-documented elsewhere — see supabase-js issues #786, #870, #1350)**:
+`@react-native-async-storage/async-storage`'s web implementation reads
+`window.localStorage` directly. Expo Router's static export prerenders
+every route once in Node (no `window`) to generate initial HTML, which
+crashed with `ReferenceError: window is not defined` the moment the
+Supabase client tried to restore a session during that prerender pass.
+Fixed in `src/services/supabase/client.ts` with a custom storage adapter
+that checks `typeof window !== 'undefined'` and falls back to an
+in-memory `Map` server-side — the prerendered HTML doesn't need a real
+session; the client takes over and reads the actual session immediately
+after hydration in the browser. **Any future native module that touches
+browser-only globals (`window`, `document`, `localStorage`) needs the
+same guard if it's reachable from a route that gets statically exported.**
+
+**Supabase RealtimeClient + Node < 22 WebSocket warning/crash (found
+running on a real Node 20 machine — did not reproduce in this sandbox,
+which runs Node 22)**: `createClient()` constructs a `RealtimeClient`
+eagerly in its constructor, whether or not realtime features are ever
+used. `RealtimeClient` needs a `WebSocket` implementation; on Node < 22
+(no native `WebSocket` global), its auto-detection **throws** (not just
+warns) unless one is supplied via the `realtime.transport` option. This
+surfaced as a Metro bundling error, not a runtime warning, the moment
+`client.ts` was evaluated.
+
+Confirmed via a Supabase maintainer's own post
+(github.com/orgs/supabase/discussions/37869) that installing `ws` and
+passing `realtime: { transport: ws }` is the **currently sanctioned
+fix**, not a workaround — Supabase already solved the old "dynamic
+import breaks other runtimes" problem on their end (realtime-js 2.15.1+,
+supabase-js 2.55.0+) by requiring the caller to supply `ws` explicitly
+instead of trying to detect/import it internally.
+
+The remaining risk was ours: requiring `ws` directly in `client.ts`
+would normally break the iOS/Android bundle, because `ws` depends on
+Node-only core modules (`net`, `tls`, `stream`, `http`) with no React
+Native equivalent, and **Metro resolves `require()` specifiers
+statically regardless of whether the containing branch ever executes**
+— a runtime `if` guard alone does not stop Metro from trying (and
+failing) to resolve `ws` into a native bundle.
+
+**Fix**: `client.ts` uses `globalThis.WebSocket` when available (true on
+every platform the app ships to — iOS, Android, web) and falls back to
+`require('ws')` only when it's genuinely absent (Node < 22). Separately,
+`metro.config.js` adds a `resolver.resolveRequest` override that
+redirects any `ws` resolution to an empty stub (`{ type: 'empty' }`) for
+every platform Metro actually bundles the app for. This makes the
+fallback branch's `require('ws')` resolution-safe everywhere it could be
+reached, even though it's dead code on every one of those platforms. Both
+parts were verified directly — not just assumed — by: (1) testing the
+resolver function in isolation with fake `ios`/`android`/`web` resolution
+requests and confirming `ws` → `{ type: 'empty' }` while other modules
+pass through unaffected, and (2) temporarily forcing the `require('ws')`
+branch to execute during a real `expo export --platform web` run and
+confirming the build still succeeds. **Lesson: a runtime environment
+check does not protect a bundled app from a package's static
+`require()` footprint — only Metro's own resolver can do that.**
+
 **Important version note**: Expo SDK 56 versions its own `expo-*` packages
 (font, constants, splash-screen, sqlite, etc.) and `expo-router` in lockstep
 with the SDK number (`56.0.x` / `56.2.x`), not independent semver like older
@@ -201,7 +259,47 @@ responsibility yourself.
 - Verified: `tsc --noEmit` clean, `eslint` clean, `expo export --platform
   web` produces a working bundle with all 18 expected routes.
 
-### ⬜ Phase 2 — Authentication, onboarding completion, splash, bottom nav polish
+### ✅ Phase 2 — Authentication, onboarding completion, splash, bottom nav (complete)
+- Email/password sign-in and sign-up screens, real React Hook Form + Zod
+  validation, friendly Supabase error message translation.
+- Google sign-in via Supabase OAuth + `expo-auth-session`'s
+  `getQueryParams` (not `expo-linking`'s `Linking.parse`, which doesn't
+  read URL hash fragments — Supabase returns tokens in the fragment).
+- Apple Sign-In via `expo-apple-authentication`, gated to iOS only,
+  nonce-based per Supabase's `signInWithIdToken` requirements.
+- `useAuthListener` bridges Supabase's `onAuthStateChange` to
+  `useSessionStore`; mounted unconditionally in `RootLayout` (not inside
+  the gated navigator) to avoid a deadlock where splash-hide depends on
+  auth-init, which depends on the listener mounting.
+- Splash now waits on fonts AND auth session check before hiding.
+- Onboarding goal selection now actually persists the chosen goal (not
+  just the completed flag) via a new `onboardingGoal` storage key.
+- Bottom tab bar: added a small active-indicator dot per tab and proper
+  safe-area-aware height/padding (previously not insets-aware).
+- Fixed a real Supabase + Expo Router static-export crash (see version
+  notes above) — caught only because we re-ran the full export check
+  after adding the new auth screens, not by `tsc`/`eslint` alone.
+- **Post-Phase-2 refinement**: onboarding's "Get started" no longer drops
+  straight into goal selection. It now routes through a new
+  `AccountChoiceScreen` (`(onboarding)/account-choice`), presenting
+  "Create an account" vs "Continue as guest" as an explicit choice.
+  Choosing guest shows a dedicated `GuestWarningScreen`
+  (`(onboarding)/guest-warning`) listing the real tradeoffs (no
+  cross-device sync, total loss of progress on uninstall/data clear, no
+  recovery if the device is lost) before letting them proceed — a full
+  screen rather than a native Alert, since the tradeoff needs more room
+  to explain than a dismissible OS dialog allows. `SignUpScreen` checks
+  `useAppReadinessStore`'s `hasCompletedOnboarding` directly (not a
+  threaded `from` param) to decide whether a freshly-created account
+  should continue to Goal selection or go straight to Home — this covers
+  every entry point to sign-up consistently (onboarding's AccountChoice,
+  GuestWarning's "create an account instead", and Sign In's own "create
+  an account" link) without each one needing to remember to pass context.
+- Verified: `tsc --noEmit` clean, `eslint` clean, `expo export --platform
+  web` succeeds with all 24 expected routes after the onboarding
+  refinement (20 before + account-choice + guest-warning, each counted
+  in both flat and grouped path form).
+
 ### ⬜ Phase 3 — Learning roadmap, lesson engine, lesson UI, progress tracking
 ### ⬜ Phase 4 — Interactive code editor, Pyodide execution, console, error handling
 ### ⬜ Phase 5 — Quizzes, challenges, gamification, XP, achievements

@@ -5,7 +5,7 @@ import { Text } from '@/components/ui/Text';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { useTheme } from '@/theme/ThemeProvider';
-import { setBoolean, storageKeys } from '@/services/storage/preferences';
+import { setBoolean, setString, storageKeys } from '@/services/storage/preferences';
 import { useAppReadinessStore } from '@/store/appReadinessStore';
 
 interface Goal {
@@ -35,9 +35,15 @@ const goals: Goal[] = [
 /**
  * Captures the person's learning goal, which later phases (the roadmap
  * generator in Phase 3, and difficulty-adjustment in the AI tutor in
- * Phase 7) use to tailor what's shown first. For Phase 1 this only
- * persists the selection locally; wiring it into the roadmap happens once
- * the roadmap itself exists.
+ * Phase 7) use to tailor what's shown first.
+ *
+ * Persistence decision: this stays local-first (AsyncStorage now, likely
+ * promoted to a SQLite `user_preferences` row once Phase 3 needs to query
+ * it alongside lesson data). It deliberately does NOT write to Supabase's
+ * `profiles` table here — that table doesn't have a `goal` column, and
+ * bolting one on ad hoc, before Phase 8's real sync layer exists, would
+ * mean re-deciding the sync strategy twice. Phase 8 decides how (and
+ * whether) this value syncs to the cloud as part of full profile sync.
  */
 export function GoalScreen() {
   const { colors } = useTheme();
@@ -45,6 +51,8 @@ export function GoalScreen() {
   const setHasCompletedOnboarding = useAppReadinessStore((s) => s.setHasCompletedOnboarding);
 
   const handleContinue = async () => {
+    if (!selectedId) return;
+    await setString(storageKeys.onboardingGoal, selectedId);
     await setBoolean(storageKeys.hasCompletedOnboarding, true);
     setHasCompletedOnboarding(true);
     router.replace('/(tabs)/home');

@@ -18,6 +18,8 @@ import { JetBrainsMono_400Regular, JetBrainsMono_500Medium } from '@expo-google-
 import { ThemeProvider, useTheme } from '@/theme/ThemeProvider';
 import { ErrorBoundary } from '@/components/feedback/ErrorBoundary';
 import { useAppReadinessStore } from '@/store/appReadinessStore';
+import { useSessionStore } from '@/store/sessionStore';
+import { useAuthListener } from '@/features/auth/hooks/useAuthListener';
 import { StatusBar } from 'expo-status-bar';
 
 SplashScreen.preventAutoHideAsync().catch(() => {
@@ -44,6 +46,10 @@ function RootNavigator() {
 }
 
 export default function RootLayout() {
+  // Mounted unconditionally (even while this component returns null below)
+  // so the auth session check always runs and can resolve isInitializing.
+  useAuthListener();
+
   const [fontsLoaded, fontError] = useSoraFonts({
     Sora_600SemiBold,
     Sora_700Bold,
@@ -54,15 +60,23 @@ export default function RootLayout() {
     JetBrainsMono_500Medium,
   });
   const setFontsLoaded = useAppReadinessStore((s) => s.setFontsLoaded);
+  const isAuthInitializing = useSessionStore((s) => s.isInitializing);
+
+  const isReady = (fontsLoaded || Boolean(fontError)) && !isAuthInitializing;
 
   useEffect(() => {
     if (fontsLoaded || fontError) {
       setFontsLoaded(true);
-      SplashScreen.hideAsync().catch(() => {});
     }
   }, [fontsLoaded, fontError, setFontsLoaded]);
 
-  if (!fontsLoaded && !fontError) {
+  useEffect(() => {
+    if (isReady) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [isReady]);
+
+  if (!isReady) {
     return null;
   }
 

@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export const storageKeys = {
   themeMode: 'indent.theme.mode',
   hasCompletedOnboarding: 'indent.onboarding.completed',
+  onboardingGoal: 'indent.onboarding.goal',
   lastActiveDate: 'indent.streak.lastActiveDate',
 } as const;
 
