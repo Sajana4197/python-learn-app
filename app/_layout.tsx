@@ -20,6 +20,7 @@ import { ErrorBoundary } from '@/components/feedback/ErrorBoundary';
 import { useAppReadinessStore } from '@/store/appReadinessStore';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAuthListener } from '@/features/auth/hooks/useAuthListener';
+import { useLessonSync } from '@/features/lessons/hooks/useLessonSync';
 import { StatusBar } from 'expo-status-bar';
 
 SplashScreen.preventAutoHideAsync().catch(() => {
@@ -28,6 +29,10 @@ SplashScreen.preventAutoHideAsync().catch(() => {
 
 function RootNavigator() {
   const { resolvedScheme } = useTheme();
+  // Background refresh only — never blocks rendering. The roadmap and
+  // lesson reader read from whatever's already cached in SQLite; this
+  // just keeps that cache fresh when a connection is available.
+  useLessonSync();
 
   return (
     <>

@@ -20,6 +20,52 @@ const migrations: { version: number; statements: string[] }[] = [
       );`,
     ],
   },
+  {
+    version: 2,
+    statements: [
+      // Mirrors Supabase's `modules`/`lessons` tables for offline reading.
+      // `content` stores the lesson's JSONB body as a serialized TEXT blob
+      // (SQLite has no native JSON column type) — parsed back into
+      // `LessonContent` on read by the lessons service, never read raw
+      // by UI code directly.
+      `CREATE TABLE IF NOT EXISTS cached_modules (
+        id TEXT PRIMARY KEY NOT NULL,
+        slug TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        sort_order INTEGER NOT NULL
+      );`,
+      `CREATE TABLE IF NOT EXISTS cached_lessons (
+        id TEXT PRIMARY KEY NOT NULL,
+        module_id TEXT NOT NULL,
+        slug TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        sort_order INTEGER NOT NULL,
+        estimated_minutes INTEGER NOT NULL,
+        xp_reward INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        FOREIGN KEY (module_id) REFERENCES cached_modules(id) ON DELETE CASCADE
+      );`,
+      `CREATE INDEX IF NOT EXISTS cached_lessons_module_id_idx ON cached_lessons(module_id);`,
+      // Local-first progress: this table is the actual source of truth
+      // the app reads from at all times, even when signed in — Supabase's
+      // user_lesson_progress is a sync target, not the primary read path.
+      // This keeps progress instant and fully offline-safe.
+      `CREATE TABLE IF NOT EXISTS lesson_progress (
+        lesson_id TEXT PRIMARY KEY NOT NULL,
+        status TEXT NOT NULL DEFAULT 'not_started'
+          CHECK (status IN ('not_started', 'in_progress', 'completed')),
+        quiz_score INTEGER,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        -- Tracks whether this row has been pushed to Supabase yet, so the
+        -- (Phase 8) sync layer knows what's pending without re-uploading
+        -- everything on every sync pass.
+        synced_at TEXT
+      );`,
+    ],
+  },
 ];
 
 async function getCurrentVersion(db: SQLite.SQLiteDatabase): Promise<number> {

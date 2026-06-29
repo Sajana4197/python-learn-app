@@ -1,6 +1,6 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
-import { Home, Map, Code2, User } from 'lucide-react-native';
+import { House, Map, Code, User } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/theme/ThemeProvider';
 import { TabBarIcon } from '@/components/ui/TabBarIcon';
@@ -29,7 +29,7 @@ export default function TabsLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ color, size, focused }) => (
-            <TabBarIcon icon={<Home color={color} size={size} />} isFocused={focused} />
+            <TabBarIcon icon={<House color={color} size={size} />} isFocused={focused} />
           ),
         }}
       />
@@ -47,7 +47,7 @@ export default function TabsLayout() {
         options={{
           title: 'Editor',
           tabBarIcon: ({ color, size, focused }) => (
-            <TabBarIcon icon={<Code2 color={color} size={size} />} isFocused={focused} />
+            <TabBarIcon icon={<Code color={color} size={size} />} isFocused={focused} />
           ),
         }}
       />

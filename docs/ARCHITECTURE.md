@@ -124,6 +124,112 @@ confirming the build still succeeds. **Lesson: a runtime environment
 check does not protect a bundled app from a package's static
 `require()` footprint — only Metro's own resolver can do that.**
 
+**Supabase SQL Editor's pre-execution scanner has a false-positive bug
+that misidentifies common English words as table names (found while
+seeding Phase 3's content)**: running `seed.sql` in the Supabase
+dashboard's SQL Editor repeatedly failed with errors like
+`ERROR: 3F000: schema "one" does not exist` or
+`ERROR: 42P01: relation "a" does not exist` — even though the file
+contains only `insert` statements, no table creation or schema
+references at all. Root cause, confirmed with a minimal one-line
+reproduction (`select 'combine multiple yes/no questions into one.';` —
+a harmless read-only query with no tables involved): the Editor's
+"Potential issue detected" pre-execution scanner uses a naive heuristic
+to guess at table names from query text, and short common words (`one`,
+`a`, likely others) sitting next to certain punctuation inside a string
+literal fool it into thinking a table by that name is being created.
+Worse: clicking **"Run and enable RLS"** doesn't just dismiss the
+warning — it actively **injects** an `ALTER TABLE <guessed-name> ENABLE
+ROW LEVEL SECURITY` statement against whatever table name it
+misidentified, which then fails for real (`relation "a" does not
+exist`), compounding the false positive into a real error. **Fix that
+actually worked**: bypass the dashboard's SQL Editor entirely for
+seed/content files with substantial prose — install `psql` (the
+standard Postgres CLI) and run the file directly against the project's
+connection string (`psql "<connection-string>" -f supabase/seed/seed.sql`).
+`psql` talks straight to Postgres with no client-side "smart" parsing,
+so it's immune to this category of bug entirely. **Going forward: any
+SQL file containing long-form natural-language content (lesson text,
+descriptions, etc.) should be run via `psql`, not the dashboard SQL
+Editor** — the migrations (mostly structural DDL with little prose)
+are less likely to hit this, but seed/content files are likely to keep
+hitting it given how much prose they contain.
+
+**expo-sqlite web export failure (found in Phase 3)**: `expo-sqlite`'s
+web target runs on `wa-sqlite`, a WASM build of SQLite, which imports a
+`.wasm` file as a module. Metro doesn't treat `.wasm` as a bundleable
+asset extension by default, so the very first `expo export --platform
+web` after adding any SQLite-touching code (even transitively, e.g. via
+the lessons/progress services) failed with "Unable to resolve module
+./wa-sqlite/wa-sqlite.wasm". Fixed in `metro.config.js` with
+`config.resolver.assetExts.push('wasm')` — confirmed as the documented,
+required fix per Expo's own SQLite docs, not a workaround. Separately,
+`wa-sqlite` needs `SharedArrayBuffer` at runtime in the browser, which
+requires `Cross-Origin-Embedder-Policy`/`Cross-Origin-Opener-Policy`
+headers — added via `config.server.enhanceMiddleware` for the dev
+server; a real web deployment needs the same two headers set by whatever
+serves the static export (EAS Hosting, your own server/CDN, etc.).
+
+**Supabase `Database` type silently collapsing every query to `never`
+(found in Phase 3, the most subtle bug yet)**: every
+`supabase.from('modules').select('*')` call was typed as `never[] | null`
+— not a compile error, just silently wrong types that made
+`lessonsService.ts` fail to compile once it tried to use the (supposedly)
+returned rows. Root cause: this version of `@supabase/supabase-js`'s
+`GenericTable` type requires a `Relationships` field on every table
+definition (an array describing foreign-key metadata, used for nested
+`.select()` joins) — our hand-written `Database` type in
+`src/services/supabase/types.ts` didn't have it, so every table failed
+to structurally satisfy `GenericTable` and fell through to `never`.
+**Found by deliberately forcing TypeScript to reveal the real inferred
+type** (assigning `result.data` to an incompatible type and reading the
+resulting error message) rather than guessing from the error text alone.
+Fixed by adding `Relationships: []` (or real foreign-key descriptors,
+for `lessons` and `user_lesson_progress`) to every table. **Lesson: when
+a hand-written type used as a library's generic parameter produces a
+confusing inference failure, check the library's actual generic
+constraint definition in `node_modules` directly rather than assuming
+the hand-written type's shape is "close enough."**
+
+**lucide-react-native icon names silently wrong since Phase 1 (found in
+Phase 3)**: `Home`, `Code2`, `CheckCircle2`, `PlayCircle`, and
+`AlertTriangle` were all used in earlier phases under names that don't
+exist in the installed `lucide-react-native` version — the real names
+are `House`, `Code`, `CircleCheckBig`, `CirclePlay`, and `TriangleAlert`.
+None of `tsc --noEmit`, `eslint`, or `expo export` ever caught this
+across three phases; the package's type declarations are apparently
+permissive enough that an invalid named import doesn't fail any of our
+normal verification steps, it just silently renders nothing at runtime.
+**Added a permanent guard**: `scripts/validate-lucide-icons.js`, run via
+`npm run validate-icons`, parses every `lucide-react-native` import
+across `app/` and `src/` and checks each name against the package's
+actual exported list (read directly from
+`node_modules/lucide-react-native/dist/icons.d.ts`). Run this after
+adding any new icon import, and as part of the standard verification
+pass alongside `tsc`/`eslint` from now on.
+
+**expo-sqlite web target is genuinely fragile — not a bug in our code
+(found after seeding real data in Phase 3)**: after seeding the
+database and running the app on web, an existing (non-incognito) browser
+profile threw `TypeError: Cannot read properties of undefined (reading
+'xFileControl')` from inside `expo-sqlite`'s web worker
+(`wa-sqlite`'s VFS layer) — the same incognito window that worked cleanly
+in earlier testing failed once stale state accumulated across many dev
+sessions. A fresh incognito window worked immediately with the exact
+same code. This matches a pattern of several **open, unresolved**
+upstream issues (expo/expo #36835, #41437, #36392) around `wa-sqlite`'s
+OPFS (Origin Private File System) file-handle/locking behavior in the
+browser — `expo-sqlite`'s own web support is explicitly experimental
+(added via expo/expo#35207), not a mature, battle-tested target the way
+iOS/Android are. **There is no code fix on our end for this** — it's a
+browser storage state issue, not an app bug. If web SQLite ever
+misbehaves during development: clear the site's storage (DevTools →
+Application → Storage → "Clear site data") or just use a fresh
+incognito window, then hard-refresh. Worth remembering for Phase 4 too,
+since Pyodide will also run inside a Web Worker — a similar category of
+browser-state fragility, even though it's a different underlying
+mechanism (WASM Python interpreter, not WASM SQLite).
+
 **Important version note**: Expo SDK 56 versions its own `expo-*` packages
 (font, constants, splash-screen, sqlite, etc.) and `expo-router` in lockstep
 with the SDK number (`56.0.x` / `56.2.x`), not independent semver like older
@@ -300,7 +406,52 @@ responsibility yourself.
   refinement (20 before + account-choice + guest-warning, each counted
   in both flat and grouped path form).
 
-### ⬜ Phase 3 — Learning roadmap, lesson engine, lesson UI, progress tracking
+### ✅ Phase 3 — Learning roadmap, lesson engine, lesson UI, progress tracking (complete)
+- Real Supabase schema: `supabase/migrations/000_profiles.sql` (filling a
+  gap left since Phase 1/2 — this table was only ever a TS type, never
+  real SQL) and `001_lesson_schema.sql` (`modules`, `lessons`,
+  `user_lesson_progress`, all with RLS — content is public-read, progress
+  is strictly per-user via `auth.uid()`).
+- Content: 4 modules, 14 lessons, "Python Fundamentals" (Variables &
+  Data Types, Operators, Control Flow & Loops, Functions). Authored in
+  TypeScript (`supabase/seed/module*.ts`) and compiled to SQL via a
+  generator script (`generate-seed-sql.ts` → `seed.sql`) so content and
+  the SQL insert statements can never drift apart by hand-transcription.
+  **Every lesson's code example was actually executed against a real
+  Python 3 interpreter and its output verified to match the lesson's
+  claimed `expectedOutput` exactly** — not just visually proofread —
+  along with structural checks (quiz answer indices in bounds, every
+  section non-empty).
+- Offline-first architecture: SQLite migration v2 adds `cached_modules`,
+  `cached_lessons` (mirroring Supabase content) and `lesson_progress`
+  (local-first source of truth — never reads Supabase directly on the
+  critical path). `useLessonSync` refreshes the cache from Supabase as a
+  non-blocking background task on app start; the roadmap and lesson
+  reader work fully offline once a cache exists.
+  `lessonsService.ts`/`progressService.ts` are the only files that touch
+  these tables directly.
+  - Real `RoadmapScreen` (replaces Phase 1 placeholder): modules with
+  lesson lists, lock/complete/active status per lesson computed from
+  progress + sort order.
+  - Real `LessonScreen`: intro, explanation, visual examples, code +
+  expected output, common mistakes, tips, then a one-question-at-a-time
+  quiz, then a completion/summary screen with next-lesson navigation —
+  matching every section the product spec requires per lesson.
+  - Home dashboard's "Continue learning" card now reads real roadmap
+  data (streak/XP/level stats remain static placeholders, correctly
+  deferred to Phase 5's gamification work).
+- Found and fixed three non-obvious bugs this phase (full detail in the
+  version-notes section above): an `expo-sqlite` web-export failure
+  needing a `metro.config.js` wasm asset fix; a Supabase `Database` type
+  missing a required `Relationships` field that silently collapsed every
+  query's row type to `never`; and several `lucide-react-native` icon
+  names that have been wrong since Phase 1 without any tool catching it
+  — now guarded permanently by `scripts/validate-lucide-icons.js`
+  (`npm run validate-icons`), added to the standard verification routine.
+- Verified: `tsc --noEmit`, `eslint`, `validate-icons`, and a full
+  `expo export --platform web` all pass clean, producing all 24 expected
+  routes including the now-functional `lesson/[id]` route.
+
 ### ⬜ Phase 4 — Interactive code editor, Pyodide execution, console, error handling
 ### ⬜ Phase 5 — Quizzes, challenges, gamification, XP, achievements
 ### ⬜ Phase 6 — Projects, bookmarks, notes, search, offline mode

@@ -1,9 +1,13 @@
 import React from 'react';
 import { ScrollView, View } from 'react-native';
+import { router } from 'expo-router';
 import { Flame, Star, Trophy } from 'lucide-react-native';
 import { Text } from '@/components/ui/Text';
 import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { Skeleton } from '@/components/feedback/Skeleton';
 import { useTheme } from '@/theme/ThemeProvider';
+import { useRoadmap, findNextLesson } from '@/features/lessons/hooks/useRoadmap';
 
 interface StatCardProps {
   icon: React.ReactNode;
@@ -26,13 +30,16 @@ function StatCard({ icon, label, value }: StatCardProps) {
 }
 
 /**
- * Home dashboard. Stat values below are static placeholders — wired to
- * the real local SQLite progress tables once Phase 3 (lesson engine) and
- * Phase 5 (gamification/XP) exist. The layout, components, and theming
- * are final; only the data source changes later.
+ * Home dashboard. Streak/XP/Level stat values are still static
+ * placeholders — wired to real data once Phase 5 (gamification) exists.
+ * "Continue learning" is wired to real roadmap/progress data now that
+ * Phase 3's lesson engine exists.
  */
 export function HomeScreen() {
   const { colors } = useTheme();
+  const { modules, isLoading } = useRoadmap();
+  const nextLesson = findNextLesson(modules);
+  const hasAnyLessons = modules.some((m) => m.lessons.length > 0);
 
   return (
     <ScrollView
@@ -67,10 +74,34 @@ export function HomeScreen() {
 
       <Card>
         <Text variant="subheading">Continue learning</Text>
-        <Text variant="body" tone="secondary" className="mt-1">
-          Your lesson roadmap will appear here once the lesson engine ships
-          in Phase 3.
-        </Text>
+
+        {isLoading ? (
+          <View className="mt-3 gap-2">
+            <Skeleton width="70%" height={16} />
+            <Skeleton width="100%" height={36} />
+          </View>
+        ) : !hasAnyLessons ? (
+          <Text variant="body" tone="secondary" className="mt-1">
+            Lessons sync automatically once you&apos;re online. Check your
+            connection and reopen the app.
+          </Text>
+        ) : nextLesson ? (
+          <>
+            <Text variant="body" tone="secondary" className="mt-1">
+              {nextLesson.title}
+            </Text>
+            <View className="mt-3">
+              <Button
+                label="Continue"
+                onPress={() => router.push(`/lesson/${nextLesson.id}`)}
+              />
+            </View>
+          </>
+        ) : (
+          <Text variant="body" tone="secondary" className="mt-1">
+            You&apos;ve completed every lesson so far. More are on the way.
+          </Text>
+        )}
       </Card>
     </ScrollView>
   );

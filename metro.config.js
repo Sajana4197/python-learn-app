@@ -4,6 +4,35 @@ const { withNativeWind } = require('nativewind/metro');
 const config = getDefaultConfig(__dirname);
 
 /**
+ * expo-sqlite's web target runs on wa-sqlite, a WASM build of SQLite,
+ * which needs its .wasm file resolved as a bundled asset. Metro doesn't
+ * treat .wasm as an asset extension by default, so without this, the
+ * web build fails with "Unable to resolve module ./wa-sqlite/wa-sqlite.wasm".
+ * Confirmed against Expo's own SQLite docs (docs.expo.dev/versions/latest/sdk/sqlite)
+ * — this is the documented, required fix, not a workaround.
+ */
+config.resolver.assetExts.push('wasm');
+
+/**
+ * wa-sqlite (expo-sqlite's web backend) needs SharedArrayBuffer, which
+ * browsers only allow on cross-origin-isolated pages — these two headers
+ * are what opts a page into that isolation. Without them, expo-sqlite
+ * compiles and bundles fine (confirmed above) but fails at runtime the
+ * moment a database is actually opened in the browser. Only affects the
+ * dev server here; a real web deployment needs the same two headers set
+ * by whatever's actually serving the static export (e.g. EAS Hosting's
+ * header config, or your own server/CDN settings) — see Expo's SQLite
+ * docs for the EAS Hosting example.
+ */
+config.server.enhanceMiddleware = (middleware) => {
+  return (req, res, next) => {
+    res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    return middleware(req, res, next);
+  };
+};
+
+/**
  * Supabase's RealtimeClient needs a WebSocket implementation, and on
  * Node.js < 22 (no native `WebSocket` global), Supabase's own currently
  * recommended fix is `npm i ws` + pass it via `realtime.transport`

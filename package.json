@@ -10,6 +10,7 @@
     "web": "expo start --web",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
+    "validate-icons": "node scripts/validate-lucide-icons.js",
     "format": "prettier --write \"**/*.{ts,tsx,js,json}\""
   },
   "dependencies": {
